@@ -7,7 +7,7 @@ from torch.utils import data
 
 # Reference
 # DATA LOADING - LOAD FILE LISTS
-def load_data_list(folder='../dataset', setname='train'):
+def load_data_list(folder='D:/01_Project/09_DCUnet/dataset/', setname='train'):
     assert(setname in ['train', 'val'])
 
     dataset = {}

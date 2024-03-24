@@ -9,16 +9,14 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import ExponentialLR
 from tqdm import tqdm
-from model import DPCRN
+from model import DPCRN, STFT
 import utils
 from se_dataset import AudioDataset
 from loss import DPCRNLoss
 from conv_stft import ConvSTFT
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--model_dir', default='exp/unet16.json', help="Directory containing params.json")
-parser.add_argument('--restore_file', default=None, help="Optional, name of the file in --model_dir containing weights to reload before training")  # 'best' or 'train'
-parser.add_argument('--batch_size', default=16, type=int, help='train batch size')
+parser.add_argument('--batch_size', default=8, type=int, help='train batch size')
 parser.add_argument('--num_epochs', default=100, type=int, help='train epochs number')
 args = parser.parse_args()
 
@@ -40,7 +38,7 @@ def main():
                   frame_len=hps.train.frame_len,
                   frame_shift=hps.train.frame_shift).cuda()
 
-    stft = ConvSTFT(win_len=hps.train.frame_len, win_inc=hps.train.frame_shift)
+    stft = STFT(hps.train.frame_len, hps.train.frame_shift).cuda()
 
     # checkpoints load
     if (os.path.exists('./final.pth.tar')):
@@ -50,9 +48,9 @@ def main():
     train_dataset = AudioDataset(data_type='train')
     val_dataset = AudioDataset(data_type='val')
     train_data_loader = DataLoader(dataset=train_dataset, batch_size=args.batch_size,
-            collate_fn=train_dataset.collate, shuffle=True, num_workers=4)
+            collate_fn=train_dataset.collate, shuffle=True, num_workers=1)
     val_data_loader = DataLoader(dataset=val_dataset, batch_size=args.batch_size,
-            collate_fn=val_dataset.collate, shuffle=False, num_workers=4)
+            collate_fn=val_dataset.collate, shuffle=False, num_workers=1)
 
     torch.set_printoptions(precision=10, profile="full")
 
@@ -66,6 +64,7 @@ def main():
         record_loss = 0.0
         for input in train_bar:
             train_mixed, train_clean, seq_len = map(lambda x: x.cuda(), input)
+            # train_mixed, train_clean, seq_len = input
             train_clean_re, train_clean_im = stft(train_clean)
             en_sp, en_re, en_im = net(train_mixed)
 
