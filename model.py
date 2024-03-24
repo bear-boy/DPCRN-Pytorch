@@ -2,26 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from modules import DPRNN
+from conv_stft import ConvSTFT, ConviSTFT
 import utils
-
-class Stft(nn.Module):
-    def __init__(self, frame_len, frame_hop):
-        super(Stft, self).__init__()
-        self.eps = torch.finfo(torch.float32).eps
-        self.frame_len = frame_len
-        self.frame_hop = frame_hop
-
-    def forward(self, x):
-        if len(x.shape) != 2:
-            print("x must be in [B, T]")
-        y = torch.stft(x, n_fft=self.frame_len, hop_length=self.frame_hop,
-                       win_length=self.frame_len, return_complex=True, center=False)
-        r = y.real
-        i = y.imag
-        # mag = torch.clamp(r ** 2 + i ** 2, self.eps) ** 0.5
-        # phase = torch.atan2(i + self.eps, r + self.eps)
-        # r shape: BxFxT, i shape: BxFxT
-        return r, i
 
 
 class DPCRN(nn.Module):
@@ -38,7 +20,8 @@ class DPCRN(nn.Module):
         self.decoder_kernel_size = decoder_kernel_size
         self.decoder_stride_size = decoder_stride_size
 
-        self.stft = Stft(frame_len=frame_len, frame_hop=frame_shift)
+        self.stft = ConvSTFT(win_len=frame_len, win_inc=frame_shift)
+        self.istft = ConviSTFT(win_len=frame_len, win_inc=frame_shift)
         self.encoder = Encoder(encoder_in_channel, self.encoder_channel_size,
                                self.encoder_kernel_size, self.encoder_stride_size, self.encoder_padding)
         self.decoder = Decoder(decoder_in_channel, self.decoder_channel_size,
@@ -54,8 +37,21 @@ class DPCRN(nn.Module):
         x = self.dprnn(x)
         x = x.permute(0,1,3,2)                  # B x C x T x F
 
-        y = self.decoder(x, skips)
-        return y
+        mask = self.decoder(x, skips)
+        en_cplx, en_re, en_im = self.mask_speech(mask, inputs)      # en_cplx shape: B x T x F
+        en_speech = self.istft(en_cplx.permute(0,2,1))
+        return en_speech, en_re, en_im
+
+    def mask_speech(self, mask, x):
+        mask_re = mask[:,0,:,:]
+        mask_im = mask[:,1,:,:]
+
+        x_re = x[:,0,:,:]
+        x_im = x[:,0,:,:]
+
+        en_re = x_re * mask_re - x_im * mask_im
+        en_im = x_re * mask_im + x_im * mask_re
+        return torch.cat([en_re, en_im],dim=-1), en_re, en_im
 
 class Encoder(nn.Module):
     def __init__(self, in_channel_size, channel_size, kernel_size, stride_size, padding):
