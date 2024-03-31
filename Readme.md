@@ -16,7 +16,7 @@ enhancement speech:
 
 #### 2.Train
 
-To train the model, **first** change the `folder` variable value of `load_data_list()` function in `se_dataset.py`, **then** run :
+To train the model, **firstly** change the `folder` variable value of `load_data_list()` function in `se_dataset.py`, **then** run :
 
 ```
 python train.py --batch_size 8 --num_epochs 100
