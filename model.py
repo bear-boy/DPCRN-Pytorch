@@ -4,7 +4,12 @@ import torch.nn.functional as F
 from modules import DPRNN
 from conv_stft import ConvSTFT, ConviSTFT
 import utils
+import scipy.signal as signal
 import numpy as np
+
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+cos_win = torch.from_numpy(signal.windows.cosine(400,False)).type(torch.FloatTensor).cuda()
+
 
 class STFT(nn.Module):
     def __init__(self, frame_len, frame_hop, fft_len=None):
@@ -12,14 +17,12 @@ class STFT(nn.Module):
         self.eps = torch.finfo(torch.float32).eps
         self.frame_len = frame_len
         self.frame_hop = frame_hop
-        if fft_len is None:
-            self.fft_len = np.int(2 ** np.ceil(np.log2(frame_len)))
 
     def forward(self, x):
         if len(x.shape) != 2:
             print("x must be in [B, T]")
-        y = torch.stft(x, n_fft=self.fft_len, hop_length=self.frame_hop,
-                       win_length=self.frame_len, return_complex=True)
+        y = torch.stft(x, hop_length=self.frame_hop,
+                       n_fft=self.frame_len, window=cos_win, return_complex=True, center=False)
         r = y.real
         i = y.imag
         return r,i
@@ -30,13 +33,11 @@ class ISTFT(nn.Module):
         self.eps = torch.finfo(torch.float32).eps
         self.frame_len = frame_len
         self.frame_hop = frame_hop
-        if fft_len is None:
-            self.fft_len = np.int(2 ** np.ceil(np.log2(frame_len)))
 
     def forward(self, real, imag):
         x = torch.complex(real, imag)
-        y = torch.istft(x, n_fft=self.fft_len, hop_length=self.frame_hop,
-                        win_length=self.frame_len)
+        y = torch.istft(x, hop_length=self.frame_hop,
+                        n_fft=self.frame_len, window=cos_win,center=False)
         return y
 
 class DPCRN(nn.Module):
@@ -68,16 +69,14 @@ class DPCRN(nn.Module):
 
     def forward(self, x):
         re, im = self.stft(x)
-        inputs = torch.stack([re,im],dim=1).permute(0,1,3,2)     # B x C x T x F
+        inputs = torch.stack([re,im],dim=1)     # B x C x F x T
         x, skips = self.encoder(inputs)
 
-        x = x.permute(0,1,3,2)                  # B x C x F x T
         x = self.dprnn(x)
-        x = x.permute(0,1,3,2)                  # B x C x T x F
 
         mask = self.decoder(x, skips)
-        en_re, en_im = self.mask_speech(mask, inputs)      # en_cplx shape: B x T x F
-        en_speech = self.istft(en_re.permute(0,2,1), en_im.permute(0,2,1))
+        en_re, en_im = self.mask_speech(mask, inputs)      # en_ shape: B x F x T
+        en_speech = self.istft(en_re, en_im)
         return en_speech, en_re, en_im
 
     def mask_speech(self, mask, x):
@@ -85,7 +84,7 @@ class DPCRN(nn.Module):
         mask_im = mask[:,1,:,:]
 
         x_re = x[:,0,:,:]
-        x_im = x[:,0,:,:]
+        x_im = x[:,1,:,:]
 
         en_re = x_re * mask_re - x_im * mask_im
         en_im = x_re * mask_im + x_im * mask_re
@@ -110,7 +109,7 @@ class Encoder(nn.Module):
         self.prelu = nn.PReLU()
 
     def forward(self, x):
-        # x shape: B x C x T x F
+        # x shape: B x C x F x T
         skips = []
         for i, (layer, norm) in enumerate(zip(self.conv, self.norm)):
             x = F.pad(x, pad=self.padding[i])
@@ -133,24 +132,24 @@ class Decoder(nn.Module):
             if i == 3:
                 self.conv.append(nn.ConvTranspose2d(in_channels=in_chan, out_channels=channel_size[i],
                                                     kernel_size=kernel_size[i], stride=stride_size[i],
-                                                    padding=[0, 1], output_padding=[0, 1]))
+                                                    padding=[1, 0], output_padding=[1, 0]))
             else:
                 self.conv.append(nn.ConvTranspose2d(in_channels=in_chan, out_channels=channel_size[i],
                                                     kernel_size=kernel_size[i], stride=stride_size[i],
-                                                    padding=[0,1]))
+                                                    padding=[1,0]))
             self.norm.append(nn.BatchNorm2d(channel_size[i]))
             in_chan = channel_size[i] * 2
         self.prelu = nn.PReLU()
 
     def forward(self, x, skips):
-        # x shape: B x C x T x F
+        # x shape: B x C x F x T
         for i, (layer, norm, skip) in enumerate(zip(self.conv, self.norm, reversed(skips))):
             x = torch.cat([x,skip], dim=1)
-            x = layer(x)[:,:,:-1,:]
+            x = layer(x)[:,:,:,:-1]
             x = self.prelu(norm(x))
         return x
 
-def test():
+def test_model():
     hps = utils.get_hparams()
     model = DPCRN(encoder_in_channel=hps.train.encoder_in_channel,
                   encoder_channel_size=hps.train.encoder_channel_size,
@@ -166,11 +165,45 @@ def test():
                   hidden_size=hps.train.dprnn_hidden_size,
                   frame_len=hps.train.frame_len,
                   frame_shift=hps.train.frame_shift)
+    model = model.to(device)
     model.eval()
     batch_size = 16
-    x = torch.randn((batch_size, 16000*5)) # 5s inputs
+    x = torch.randn((batch_size, 16000*5)).to(device) # 5s inputs
     y = model(x)
     return y
 
+def test_stft():
+    hps = utils.get_hparams()
+    stft = STFT(frame_len=hps.train.frame_len, frame_hop=hps.train.frame_shift)
+    istft = ISTFT(frame_len=hps.train.frame_len, frame_hop=hps.train.frame_shift)
+    x = torch.randn((8,16100*5))
+    x_r, x_i = stft(x)
+    x_rec = istft(x_r, x_i)
+    print(x_rec.size(1))
+
+def get_model_size():
+    hps = utils.get_hparams()
+    model = DPCRN(encoder_in_channel=hps.train.encoder_in_channel,
+                  encoder_channel_size=hps.train.encoder_channel_size,
+                  encoder_kernel_size=hps.train.encoder_kernel_size,
+                  encoder_stride_size=hps.train.encoder_stride_size,
+                  encoder_padding=hps.train.encoder_padding,
+                  decoder_in_channel=hps.train.decoder_in_channel,
+                  decoder_channel_size=hps.train.decoder_channel_size,
+                  decoder_kernel_size=hps.train.decoder_kernel_size,
+                  decoder_stride_size=hps.train.decoder_stride_size,
+                  rnn_type=hps.train.dprnn_rnn_type,
+                  input_size=hps.train.dprnn_input_size,
+                  hidden_size=hps.train.dprnn_hidden_size,
+                  frame_len=hps.train.frame_len,
+                  frame_shift=hps.train.frame_shift)
+    model = model.to(device)
+    para = [p.numel() for p in model.parameters() if p.requires_grad]
+    total_para_size = sum(para)
+    print(total_para_size)
+    return total_para_size
+
 if __name__ == "__main__":
-    test()
+    # get_model_size()
+    # test_stft()
+    test_model()

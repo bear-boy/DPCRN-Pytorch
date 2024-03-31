@@ -12,8 +12,8 @@ def spec_loss(y_true_re, y_true_im, y_pred_re, y_pred_im):
     # imag-part loss
     imag_loss = mse_fn(y_true_im, y_pred_im)
     # magnitude loss
-    y_true_mag = (y_true_re ** 2 + y_true_im ** 2) ** 0.5
-    y_pred_mag = (y_pred_re ** 2 + y_pred_im ** 2) ** 0.5
+    y_true_mag = (y_true_re ** 2 + y_true_im ** 2 + 1e-8) ** 0.5
+    y_pred_mag = (y_pred_re ** 2 + y_pred_im ** 2 + 1e-8) ** 0.5
     mag_loss = mse_fn(y_true_mag, y_pred_mag)
 
     total_loss = real_loss + imag_loss + mag_loss

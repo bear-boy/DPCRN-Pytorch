@@ -1,13 +1,13 @@
 import numpy as np
 from tqdm import tqdm
 import librosa
-import os, csv
+import os
 import torch
 from torch.utils import data
 
 # Reference
 # DATA LOADING - LOAD FILE LISTS
-def load_data_list(folder='D:/01_Project/09_DCUnet/dataset/', setname='train'):
+def load_data_list(folder='./dataset/', setname='train'):
     assert(setname in ['train', 'val'])
 
     dataset = {}
@@ -51,10 +51,11 @@ class AudioDataset(data.Dataset):
     Audio sample reader.
     """
 
-    def __init__(self, data_type):
+    def __init__(self, data_type, win_len, hop_len):
         dataset = load_data_list(setname=data_type)
         self.dataset = load_data(dataset)
-
+        self.win_len = win_len
+        self.hop_len = hop_len
         self.file_names = dataset['innames']
 
     def __getitem__(self, idx):
@@ -68,6 +69,10 @@ class AudioDataset(data.Dataset):
 
     def zero_pad_concat(self, inputs):
         max_t = max(inp.shape[0] for inp in inputs)
+        # pad zero at end to make (data_len - win_len)/hop_len is integer,
+        # which will make sure that torch.istft() outputs' length equal to torch.stft() inputs'
+        frames = int(np.ceil((max_t - self.win_len) / self.hop_len)) + 1
+        max_t = (frames - 1) * self.hop_len + self.win_len
         shape = (len(inputs), max_t)
         input_mat = np.zeros(shape, dtype=np.float32)
         for e, inp in enumerate(inputs):
