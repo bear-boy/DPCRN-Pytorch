@@ -8,11 +8,11 @@ An unofficial Pytorch implementation of DPCRN model.
 
 noisy speech:
 
-![img](./img/noisy.png)
+![img](img/noisy.PNG)
 
 enhancement speech:
 
-![img](./img/enhancement.png)
+![img](img/enhancement.PNG)
 
 #### 2.Train
 
